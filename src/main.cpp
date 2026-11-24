@@ -56,9 +56,14 @@ static void showWifiLed() {
   setLed(LED_LEVEL, LED_LEVEL, 0);
 }
 
+static void serviceClients();
+
 static float averagedMilliVolts() {
   uint32_t sum = 0;
   for (int i = 0; i < ADC_SAMPLES; i++) {
+    if ((i % 4) == 0) {
+      serviceClients();
+    }
     sum += analogReadMilliVolts(PIN_OUT);
   }
   return static_cast<float>(sum) / static_cast<float>(ADC_SAMPLES);
@@ -143,6 +148,7 @@ static void formatReading(char* body, size_t length) {
 }
 
 static void handleRoot() {
+  server.sendHeader("Cache-Control", "no-store");
   server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
 }
 
@@ -246,12 +252,16 @@ void setup() {
   nextSampleAt = millis();
 }
 
-void loop() {
+static void serviceClients() {
   serviceWifi();
   showWifiLed();
   if (serverUp) {
     server.handleClient();
   }
+}
+
+void loop() {
+  serviceClients();
 
   if (static_cast<int32_t>(millis() - nextSampleAt) >= 0) {
     sampleSensor();

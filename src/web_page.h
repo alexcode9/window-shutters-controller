@@ -220,12 +220,17 @@ async function poll() {
     setStatus("live", true);
     draw(d.ms);
   } catch (err) {
-    setStatus("no data", false);
+    // One dropped reply is normal on this server. watchStale flags a real gap.
   }
 }
 
 function watchStale() {
-  if (lastRx !== 0 && performance.now() - lastRx > 2000) setStatus("no data", false);
+  if (lastRx !== 0 && performance.now() - lastRx > 4000) setStatus("no data", false);
+}
+
+async function tick() {
+  await poll();
+  setTimeout(tick, 200);
 }
 
 window.addEventListener("resize", () => {
@@ -233,8 +238,7 @@ window.addEventListener("resize", () => {
   draw(latestNow);
 });
 resize();
-poll();
-setInterval(poll, 200);
+tick();
 setInterval(watchStale, 500);
 </script>
 </body>
