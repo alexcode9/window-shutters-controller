@@ -20,6 +20,10 @@ constexpr bool SIGN_LOW_IS_REVERSE = true;
 
 constexpr int SAMPLE_HZ = 10;
 constexpr int ADC_SAMPLES = 16;
+
+// One-pole low-pass on the published current. 0 turns the filter off.
+// 0.8 s removes the ADC fuzz and still follows a real change within a couple of seconds.
+constexpr float FILTER_TAU_S = 0.8f;
 constexpr uint32_t CHART_WINDOW_MS = 60000;
 
 constexpr uint16_t HTTP_PORT = 80;

@@ -3,6 +3,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <cmath>
+
 #include "config.h"
 
 #if __has_include("secrets.h")
@@ -62,6 +64,32 @@ static float averagedMilliVolts() {
   return static_cast<float>(sum) / static_cast<float>(ADC_SAMPLES);
 }
 
+static float filteredAmps = 0.0f;
+static float filteredMv = 0.0f;
+static bool filterPrimed = false;
+static uint32_t lastFilterMs = 0;
+
+static void lowPass(float amps, float millivolts, uint32_t now) {
+  if (!filterPrimed || FILTER_TAU_S <= 0.0f) {
+    filteredAmps = amps;
+    filteredMv = millivolts;
+    filterPrimed = true;
+    lastFilterMs = now;
+    return;
+  }
+
+  float dt = static_cast<float>(now - lastFilterMs) / 1000.0f;
+  lastFilterMs = now;
+  if (dt < 0.0f) {
+    dt = 0.0f;
+  } else if (dt > 1.0f) {
+    dt = 1.0f;
+  }
+  const float alpha = 1.0f - expf(-dt / FILTER_TAU_S);
+  filteredAmps += alpha * (amps - filteredAmps);
+  filteredMv += alpha * (millivolts - filteredMv);
+}
+
 static void sampleSensor() {
   const float measuredMv = averagedMilliVolts();
   float magnitudeMv = measuredMv - ZERO_MV;
@@ -76,9 +104,12 @@ static void sampleSensor() {
     amps = -amps;
   }
 
-  latest.ms = millis();
-  latest.amps = amps;
-  latest.mV = measuredMv;
+  const uint32_t now = millis();
+  lowPass(amps, measuredMv, now);
+
+  latest.ms = now;
+  latest.amps = filteredAmps;
+  latest.mV = filteredMv;
   latest.reverse = reverse;
 
   Serial.printf("%lu ms  ", static_cast<unsigned long>(latest.ms));
