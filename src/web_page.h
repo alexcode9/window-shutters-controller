@@ -7,7 +7,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAX471 current</title>
+<title>Persiana</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -27,16 +27,67 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
     font-weight: 600;
     margin: 0 0 4px;
   }
+  h2 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
   .sub {
     margin: 0 0 18px;
     color: #8b98ab;
     font-size: 0.9rem;
   }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    appearance: none;
+    border: 0;
+    background: #243041;
+    color: #e7ecf3;
+    font: inherit;
+    font-weight: 600;
+    padding: 12px 22px;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  button.stop { background: #6b3030; }
+  button.active { background: #1f6f4a; }
+  .motion {
+    margin: 12px 0 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+  .settings {
+    margin-top: 18px;
+    padding: 16px;
+    background: #161b22;
+    border-radius: 12px;
+  }
+  .fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #9aa6b8;
+    font-size: 0.85rem;
+  }
+  input {
+    background: #0e1116;
+    color: #e7ecf3;
+    border: 1px solid #2a3340;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    width: 148px;
+  }
+  .hint { color: #8b98ab; font-size: 0.85rem; margin: 12px 0 0; }
+  #saveNote { margin-left: 8px; color: #7dcea0; }
   .readout {
     display: flex;
     align-items: baseline;
     gap: 20px;
     flex-wrap: wrap;
+    margin-top: 22px;
   }
   .amps {
     font-size: 3.4rem;
@@ -61,8 +112,31 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>MAX471 current</h1>
+  <h1>Persiana</h1>
   <p class="sub">Last 60 seconds, from <span id="host"></span></p>
+  <div class="controls">
+    <button type="button" id="btnOpen">Open</button>
+    <button type="button" class="stop" id="btnStop">Stop</button>
+    <button type="button" id="btnClose">Close</button>
+  </div>
+  <p class="motion" id="motion">stopped</p>
+  <form class="settings" id="settings">
+    <h2>Settings</h2>
+    <div class="fields">
+      <label>Current threshold (A)
+        <input id="threshold" type="number" min="0.05" max="3" step="0.01" required>
+      </label>
+      <label>Time to open (s)
+        <input id="openSeconds" type="number" min="1" max="180" step="1" required>
+      </label>
+      <label>Time to close (s)
+        <input id="closeSeconds" type="number" min="1" max="180" step="1" required>
+      </label>
+      <button type="submit">Save</button>
+      <span id="saveNote"></span>
+    </div>
+    <p class="hint">The orange lines are the threshold. Set it above the running current and below the bumper spike. The motor also stops when the travel time runs out.</p>
+  </form>
   <div class="readout">
     <div class="amps" id="amps">&mdash;</div>
     <div class="meta">
@@ -80,6 +154,7 @@ const canvas = document.getElementById("chart");
 const ctx = canvas.getContext("2d");
 let lastRx = 0;
 let latestNow = 0;
+let thresholdA = 1;
 
 document.getElementById("host").textContent = location.host;
 
@@ -98,6 +173,13 @@ function resize() {
 function formatSigned(amps) {
   const sign = amps >= 0 ? "+" : "";
   return sign + amps.toFixed(3) + " A";
+}
+
+function showMotion(state) {
+  const name = state || "stopped";
+  document.getElementById("motion").textContent = name;
+  document.getElementById("btnOpen").className = name === "opening" ? "active" : "";
+  document.getElementById("btnClose").className = name === "closing" ? "active" : "";
 }
 
 function draw(now) {
@@ -120,6 +202,8 @@ function draw(now) {
     if (a < lo) lo = a;
     if (a > hi) hi = a;
   }
+  if (thresholdA > hi) hi = thresholdA;
+  if (-thresholdA < lo) lo = -thresholdA;
   const pad = Math.max(0.02, (hi - lo) * 0.12);
   lo -= pad;
   hi += pad;
@@ -170,6 +254,18 @@ function draw(now) {
   ctx.stroke();
   ctx.setLineDash([]);
 
+  ctx.strokeStyle = "#e0a15a";
+  ctx.setLineDash([2, 4]);
+  [thresholdA, -thresholdA].forEach((a) => {
+    if (a < lo || a > hi) return;
+    const y = yOf(a);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
   ctx.fillStyle = "#8b98ab";
   ctx.textBaseline = "alphabetic";
   ctx.fillText("-60 s", padL, h - 8);
@@ -217,6 +313,7 @@ async function poll() {
     document.getElementById("amps").textContent = formatSigned(d.amps);
     document.getElementById("mv").textContent = Math.round(d.mV) + " mV at OUT";
     document.getElementById("dir").textContent = d.reverse ? "reverse (RS- to RS+)" : "forward (RS+ to RS-)";
+    showMotion(d.state);
     setStatus("live", true);
     draw(d.ms);
   } catch (err) {
@@ -233,11 +330,63 @@ async function tick() {
   setTimeout(tick, 200);
 }
 
+async function loadSettings() {
+  const res = await fetch("/api/settings", { cache: "no-store" });
+  if (!res.ok) return;
+  const d = await res.json();
+  thresholdA = Number(d.threshold) || 0;
+  document.getElementById("threshold").value = d.threshold;
+  document.getElementById("openSeconds").value = d.openSeconds;
+  document.getElementById("closeSeconds").value = d.closeSeconds;
+  showMotion(d.state);
+  if (latestNow) draw(latestNow);
+}
+
+async function command(cmd) {
+  const body = new URLSearchParams({ cmd: cmd });
+  const res = await fetch("/api/command", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body
+  });
+  if (!res.ok) return;
+  const d = await res.json();
+  showMotion(d.state);
+}
+
+document.getElementById("btnOpen").addEventListener("click", () => command("open"));
+document.getElementById("btnStop").addEventListener("click", () => command("stop"));
+document.getElementById("btnClose").addEventListener("click", () => command("close"));
+
+document.getElementById("settings").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const note = document.getElementById("saveNote");
+  const body = new URLSearchParams({
+    threshold: document.getElementById("threshold").value,
+    openSeconds: document.getElementById("openSeconds").value,
+    closeSeconds: document.getElementById("closeSeconds").value
+  });
+  const res = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body
+  });
+  if (!res.ok) {
+    note.textContent = "Could not save";
+    return;
+  }
+  const d = await res.json();
+  thresholdA = Number(d.threshold) || 0;
+  note.textContent = "Saved";
+  if (latestNow) draw(latestNow);
+});
+
 window.addEventListener("resize", () => {
   resize();
   draw(latestNow);
 });
 resize();
+loadSettings();
 tick();
 setInterval(watchStale, 500);
 </script>

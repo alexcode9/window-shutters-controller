@@ -6,11 +6,12 @@
 #include <cmath>
 
 #include "config.h"
+#include "shutter.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-#error "Missing include/secrets.h. Copy include/secrets.h.example to include/secrets.h and set WIFI_SSID and WIFI_PASSWORD."
+#error "Missing include/secrets.h. Copy include/secrets.h.example and set the Wi-Fi and MQTT values."
 #endif
 
 #include "web_page.h"
@@ -111,6 +112,7 @@ static void sampleSensor() {
 
   const uint32_t now = millis();
   lowPass(amps, measuredMv, now);
+  shutterOnCurrent(amps < 0.0f ? -amps : amps, now);
 
   latest.ms = now;
   latest.amps = filteredAmps;
@@ -122,7 +124,9 @@ static void sampleSensor() {
   Serial.print(" A  ");
   Serial.print(latest.mV, 0);
   Serial.print(" mV  ");
-  Serial.println(latest.reverse ? "reverse" : "forward");
+  Serial.print(latest.reverse ? "reverse" : "forward");
+  Serial.print("  ");
+  Serial.println(shutterState());
 }
 
 // Formats one JSON reading without relying on printf float support.
@@ -138,13 +142,14 @@ static void formatReading(char* body, size_t length) {
   }
 
   snprintf(body, length,
-           "{\"ms\":%lu,\"amps\":%s%d.%04d,\"mV\":%d,\"reverse\":%s}",
+           "{\"ms\":%lu,\"amps\":%s%d.%04d,\"mV\":%d,\"reverse\":%s,\"state\":\"%s\"}",
            static_cast<unsigned long>(latest.ms),
            negative ? "-" : "",
            whole,
            frac,
            millivolts,
-           latest.reverse ? "true" : "false");
+           latest.reverse ? "true" : "false",
+           shutterState());
 }
 
 static void handleRoot() {
@@ -153,8 +158,39 @@ static void handleRoot() {
 }
 
 static void handleReading() {
-  char body[96];
+  char body[160];
   formatReading(body, sizeof(body));
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", body);
+}
+
+static void handleSettings() {
+  char body[128];
+  shutterWriteSettingsJson(body, sizeof(body));
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", body);
+}
+
+static void handleSettingsPost() {
+  if (!server.hasArg("threshold") || !server.hasArg("openSeconds") || !server.hasArg("closeSeconds")) {
+    server.send(400, "text/plain", "missing field");
+    return;
+  }
+  if (!shutterSaveSettings(server.arg("threshold").toFloat(), server.arg("openSeconds").toInt(),
+                           server.arg("closeSeconds").toInt())) {
+    server.send(400, "text/plain", "out of range");
+    return;
+  }
+  handleSettings();
+}
+
+static void handleCommand() {
+  if (!shutterCommand(server.arg("cmd").c_str())) {
+    server.send(400, "text/plain", "unknown command");
+    return;
+  }
+  char body[48];
+  snprintf(body, sizeof(body), "{\"state\":\"%s\"}", shutterState());
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", body);
 }
@@ -169,13 +205,16 @@ static void startServer() {
   }
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/reading", HTTP_GET, handleReading);
+  server.on("/api/settings", HTTP_GET, handleSettings);
+  server.on("/api/settings", HTTP_POST, handleSettingsPost);
+  server.on("/api/command", HTTP_POST, handleCommand);
   server.on("/favicon.ico", HTTP_GET, handleFavicon);
   server.begin();
   serverUp = true;
 }
 
 static void announce() {
-  Serial.print("Chart: http://");
+  Serial.print("Persiana: http://");
   Serial.print(WiFi.localIP());
   Serial.print("/  http://");
   Serial.print(MDNS_HOST);
@@ -233,10 +272,12 @@ static void serviceWifi() {
 }
 
 void setup() {
+  shutterBegin();
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("MAX471 current graph");
+  Serial.println("Persiana controller");
+  shutterLogConfig();
 
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_OUT, ADC_11db);
@@ -258,10 +299,12 @@ static void serviceClients() {
   if (serverUp) {
     server.handleClient();
   }
+  shutterService(false);
 }
 
 void loop() {
   serviceClients();
+  shutterService(true);
 
   if (static_cast<int32_t>(millis() - nextSampleAt) >= 0) {
     sampleSensor();
